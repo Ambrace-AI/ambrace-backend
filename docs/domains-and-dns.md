@@ -16,8 +16,10 @@ list, keeps every hostname one level under `ambrace.in` (so a single wildcard
 certificate `*.ambrace.in` could cover them all later), and extends to new
 services (`auth-dev.`, `admin-dev.`) without inventing new names.
 
-Cognito sign-in uses the free AWS-provided domain
-(`ambrace-<env>.auth.ap-south-1.amazoncognito.com`) for now. Users only see it
+Cognito sign-in uses the free AWS-provided domain for now:
+`ambrace-dev.auth.ap-south-1.amazoncognito.com` (dev) and
+`ambrace.auth.ap-south-1.amazoncognito.com` (prod). The same addresses are
+registered in the Google OAuth clients. Users only see it
 briefly during Google sign-in. A branded `auth.ambrace.in` can be added later; it
 needs a second certificate in `us-east-1`.
 

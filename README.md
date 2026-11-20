@@ -41,10 +41,23 @@ docs/             Gemini Live contract, QA notes, domains and DNS
 Protected routes require a Cognito **access token** as `Authorization: Bearer …`.
 The token's signature, expiry, issuer, `token_use` and `client_id` are checked.
 
-`COGNITO_USER_POOL_ID` and `COGNITO_APP_CLIENT_ID` are **not set yet** in either
-environment because the user pool does not exist yet. Until they are, the API
-fails closed: `/` and `/health` work, every protected route returns `401`. No
-viva can be started until the user pool is added.
+Each environment has its own Cognito user pool (`infra/app/cognito.tf`). People
+sign in with an email and password or with Google, and the web app sends the
+resulting access token to this API.
+
+- **Cost:** the pool uses the Lite feature plan (free up to 10,000 monthly
+  active users, Google sign-ins included), Cognito's built-in email sender
+  (50 emails a day per AWS account) and no MFA text messages.
+- **Google credentials:** before the first deployment of an environment, an
+  operator creates one SecureString parameter, `/ambrace/<env>/google_oauth`,
+  with the JSON value `{"client_id":"...","client_secret":"..."}` from the
+  Google OAuth client. The deployment stops with a clear error if it is missing
+  or malformed. To rotate, edit the parameter and run the deployment again.
+- **Not linked:** the same email used once with Google and once with a password
+  is two separate accounts for now.
+
+When run locally without `COGNITO_USER_POOL_ID` and `COGNITO_APP_CLIENT_ID`, the
+API fails closed: `/` and `/health` work, every protected route returns `401`.
 
 ## Local development
 
@@ -159,7 +172,7 @@ The one-time account setup is in [infra/bootstrap/README.md](infra/bootstrap/REA
 | `GEMINI_LIVE_MODEL` | Terraform | Gemini Live model name |
 | `VIVA_SESSION_DURATION_MINUTES` | Terraform | 5, 10 or 15 |
 | `CORS_ORIGINS` | Terraform | exact browser origins, comma-separated, no wildcards |
-| `COGNITO_USER_POOL_ID`, `COGNITO_APP_CLIENT_ID` | Terraform | set together, or both empty (fail closed) |
+| `COGNITO_USER_POOL_ID`, `COGNITO_APP_CLIENT_ID` | Terraform (from the user pool it creates) | set together, or both empty (fail closed) |
 
 ## Privacy
 

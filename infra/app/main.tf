@@ -138,8 +138,8 @@ resource "aws_lambda_function" "backend" {
       GEMINI_LIVE_MODEL             = var.gemini_live_model
       VIVA_SESSION_DURATION_MINUTES = tostring(var.viva_session_duration_minutes)
       CORS_ORIGINS                  = join(",", var.cors_allowed_origins)
-      COGNITO_USER_POOL_ID          = var.cognito_user_pool_id
-      COGNITO_APP_CLIENT_ID         = var.cognito_app_client_id
+      COGNITO_USER_POOL_ID          = aws_cognito_user_pool.main.id
+      COGNITO_APP_CLIENT_ID         = aws_cognito_user_pool_client.web.id
     }
   }
 

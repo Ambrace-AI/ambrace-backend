@@ -67,3 +67,33 @@ output "google_api_key_parameter" {
   description = "SSM parameter an operator must fill with the real Gemini API key."
   value       = aws_ssm_parameter.google_api_key.name
 }
+
+output "google_oauth_parameter" {
+  description = "SSM parameter an operator creates with the Google client id and secret (JSON)."
+  value       = data.aws_ssm_parameter.google_oauth.name
+}
+
+output "cognito_user_pool_id" {
+  description = "Cognito user pool that holds the user accounts."
+  value       = aws_cognito_user_pool.main.id
+}
+
+output "cognito_app_client_id" {
+  description = "Cognito app client the web app signs in with. Not a secret."
+  value       = aws_cognito_user_pool_client.web.id
+}
+
+output "cognito_issuer" {
+  description = "Issuer of the tokens this API accepts."
+  value       = "https://cognito-idp.${local.aws_region}.amazonaws.com/${aws_cognito_user_pool.main.id}"
+}
+
+output "cognito_domain_url" {
+  description = "Base URL of the Cognito sign-in endpoints."
+  value       = "https://${local.cognito_domain_host}"
+}
+
+output "google_authorized_redirect_uri" {
+  description = "Must be listed under Authorised redirect URIs in the Google OAuth client."
+  value       = "https://${local.cognito_domain_host}/oauth2/idpresponse"
+}

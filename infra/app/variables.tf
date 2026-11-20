@@ -127,22 +127,39 @@ variable "api_throttling_burst_limit" {
 # ------------------------------------------------------------------------------
 # Authentication
 # ------------------------------------------------------------------------------
-# Both empty until the Cognito user pool exists. While empty, the API fails
-# closed: public routes work and every protected route returns 401.
 
-variable "cognito_user_pool_id" {
+variable "cognito_domain_prefix" {
   type        = string
-  description = "Cognito user pool that issues access tokens for this API."
-  default     = ""
-}
-
-variable "cognito_app_client_id" {
-  type        = string
-  description = "Cognito app client whose access tokens this API accepts."
-  default     = ""
+  description = "First part of the Cognito sign-in address (<prefix>.auth.<region>.amazoncognito.com). Must be unused by any other AWS customer in the region, and must match the URLs registered in the Google OAuth client."
 
   validation {
-    condition     = (var.cognito_user_pool_id == "") == (var.cognito_app_client_id == "")
-    error_message = "cognito_user_pool_id and cognito_app_client_id must be set together."
+    condition     = can(regex("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", var.cognito_domain_prefix)) && !can(regex("aws|amazon|cognito", var.cognito_domain_prefix))
+    error_message = "Use lowercase letters, numbers and hyphens (not at either end). Cognito also forbids the words aws, amazon and cognito."
+  }
+}
+
+variable "auth_callback_urls" {
+  type        = list(string)
+  description = "Exact web app URLs Cognito may send a user back to after sign-in."
+
+  validation {
+    condition = length(var.auth_callback_urls) > 0 && alltrue([
+      for url in var.auth_callback_urls :
+      can(regex("^https://[a-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$", url)) || can(regex("^http://localhost:[0-9]+(/[A-Za-z0-9._~/-]*)?$", url))
+    ])
+    error_message = "Each callback must be an https:// URL, or http://localhost:<port> for local development. No wildcards or query strings."
+  }
+}
+
+variable "auth_logout_urls" {
+  type        = list(string)
+  description = "Exact web app URLs Cognito may send a user to after sign-out."
+
+  validation {
+    condition = length(var.auth_logout_urls) > 0 && alltrue([
+      for url in var.auth_logout_urls :
+      can(regex("^https://[a-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$", url)) || can(regex("^http://localhost:[0-9]+(/[A-Za-z0-9._~/-]*)?$", url))
+    ])
+    error_message = "Each sign-out URL must be an https:// URL, or http://localhost:<port> for local development. No wildcards or query strings."
   }
 }

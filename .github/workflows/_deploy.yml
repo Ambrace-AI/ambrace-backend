@@ -217,6 +217,19 @@ jobs:
           echo "Forged bearer token -> HTTP ${STATUS}"
           [ "${STATUS}" = "401" ] || { echo "ERROR: expected 401." >&2; exit 1; }
 
+      # The API verifies tokens against these two documents, so if they are
+      # unreachable no one can sign in.
+      - name: Smoke test - sign-in service publishes its keys
+        if: ${{ inputs.apply }}
+        run: |
+          ISSUER=$(terraform -chdir=infra/app output -raw cognito_issuer)
+          for DOCUMENT in ".well-known/openid-configuration" ".well-known/jwks.json"; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "${ISSUER}/${DOCUMENT}" || true)
+            echo "GET ${ISSUER}/${DOCUMENT} -> HTTP ${STATUS}"
+            [ "${STATUS}" = "200" ] || { echo "ERROR: expected 200." >&2; exit 1; }
+          done
+          echo "Google redirect URI to register: $(terraform -chdir=infra/app output -raw google_authorized_redirect_uri)"
+
       - name: Smoke test - CORS allows the configured origin only
         if: ${{ inputs.apply }}
         run: |

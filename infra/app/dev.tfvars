@@ -7,3 +7,14 @@ cors_allowed_origins = [
   "https://app-dev.ambrace.in",
   "http://localhost:3000",
 ]
+
+# Sign-in. The prefix is registered in the Google OAuth client "Ambrace Dev".
+cognito_domain_prefix = "ambrace-dev"
+auth_callback_urls = [
+  "https://app-dev.ambrace.in/auth/callback",
+  "http://localhost:3000/auth/callback",
+]
+auth_logout_urls = [
+  "https://app-dev.ambrace.in",
+  "http://localhost:3000",
+]

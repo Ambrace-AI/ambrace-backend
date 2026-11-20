@@ -22,6 +22,12 @@ mock_provider "aws" {
       name = "ap-south-1"
     }
   }
+  mock_data "aws_ssm_parameter" {
+    defaults = {
+      type  = "SecureString"
+      value = "{\"client_id\":\"mock-client-id.apps.googleusercontent.com\",\"client_secret\":\"mock-secret\"}"
+    }
+  }
   mock_data "aws_acm_certificate" {
     defaults = {
       arn = "arn:aws:acm:ap-south-1:798299234172:certificate/00000000-0000-0000-0000-000000000000"
@@ -34,6 +40,10 @@ variables {
   aws_account_id       = "798299234172"
   cors_allowed_origins = ["https://app-dev.ambrace.in", "http://localhost:3000"]
   custom_domain_name   = "api-dev.ambrace.in"
+
+  cognito_domain_prefix = "ambrace-dev"
+  auth_callback_urls    = ["https://app-dev.ambrace.in/auth/callback", "http://localhost:3000/auth/callback"]
+  auth_logout_urls      = ["https://app-dev.ambrace.in", "http://localhost:3000"]
 }
 
 run "dev_sessions" {
@@ -138,21 +148,146 @@ run "rejects_wildcard_origin" {
   expect_failures = [var.cors_allowed_origins]
 }
 
-run "auth_starts_unconfigured" {
+run "sign_in_is_free_tier_and_protected" {
   command = plan
 
   assert {
-    condition     = aws_lambda_function.backend.environment[0].variables.COGNITO_USER_POOL_ID == "" && aws_lambda_function.backend.environment[0].variables.COGNITO_APP_CLIENT_ID == ""
-    error_message = "Until a user pool exists the API runs fail-closed with empty identifiers."
+    condition     = aws_cognito_user_pool.main.user_pool_tier == "LITE"
+    error_message = "The user pool must stay on the cheapest feature plan."
+  }
+
+  assert {
+    condition     = aws_cognito_user_pool.main.deletion_protection == "ACTIVE"
+    error_message = "Deleting the user pool deletes every account; protection must stay on."
+  }
+
+  assert {
+    condition     = aws_cognito_user_pool.main.mfa_configuration == "OFF"
+    error_message = "MFA by text message costs money and is not part of the MVP."
+  }
+
+  assert {
+    condition     = aws_cognito_user_pool.main.email_configuration[0].email_sending_account == "COGNITO_DEFAULT"
+    error_message = "Email must use the built-in Cognito sender, not SES."
+  }
+
+  assert {
+    condition     = toset(aws_cognito_user_pool.main.username_attributes) == toset(["email"])
+    error_message = "People sign in with their email address."
   }
 }
 
-run "rejects_half_configured_auth" {
+run "web_client_is_public_pkce_client" {
+  command = plan
+
+  assert {
+    condition     = aws_cognito_user_pool_client.web.generate_secret == false
+    error_message = "A browser app cannot keep a client secret."
+  }
+
+  assert {
+    condition     = toset(aws_cognito_user_pool_client.web.allowed_oauth_flows) == toset(["code"])
+    error_message = "Only the authorization-code flow is allowed (no implicit flow)."
+  }
+
+  assert {
+    condition     = toset(aws_cognito_user_pool_client.web.supported_identity_providers) == toset(["COGNITO", "Google"])
+    error_message = "Sign-in must offer email/password and Google."
+  }
+
+  assert {
+    condition     = !contains(aws_cognito_user_pool_client.web.explicit_auth_flows, "ALLOW_USER_PASSWORD_AUTH")
+    error_message = "Plain password sign-in must stay disabled; the app uses SRP."
+  }
+
+  assert {
+    condition     = toset(aws_cognito_user_pool_client.web.callback_urls) == toset(["https://app-dev.ambrace.in/auth/callback", "http://localhost:3000/auth/callback"])
+    error_message = "Cognito must only return users to the configured URLs."
+  }
+}
+
+run "google_uses_credentials_from_ssm" {
+  command = plan
+
+  assert {
+    condition     = data.aws_ssm_parameter.google_oauth.name == "/ambrace/dev/google_oauth"
+    error_message = "Google credentials are read from the per-environment SSM parameter."
+  }
+
+  assert {
+    condition     = nonsensitive(aws_cognito_identity_provider.google.provider_details["client_id"]) == "mock-client-id.apps.googleusercontent.com"
+    error_message = "The Google provider must take its client id from the SSM parameter."
+  }
+
+  assert {
+    condition     = nonsensitive(aws_cognito_identity_provider.google.provider_details["authorize_scopes"]) == "openid email profile"
+    error_message = "Only the basic Google scopes may be requested."
+  }
+
+  assert {
+    condition     = aws_cognito_user_pool_domain.main.domain == "ambrace-dev"
+    error_message = "The sign-in address must match the one registered with Google."
+  }
+}
+
+run "rejects_google_credentials_that_are_not_json" {
+  command = plan
+
+  override_data {
+    target = data.aws_ssm_parameter.google_oauth
+    values = {
+      type  = "SecureString"
+      value = "just-the-client-secret"
+    }
+  }
+
+  expect_failures = [aws_cognito_identity_provider.google]
+}
+
+run "rejects_google_credentials_pasted_the_wrong_way_round" {
+  command = plan
+
+  override_data {
+    target = data.aws_ssm_parameter.google_oauth
+    values = {
+      type  = "SecureString"
+      value = "{\"client_id\":\"a-secret\",\"client_secret\":\"x.apps.googleusercontent.com\"}"
+    }
+  }
+
+  expect_failures = [aws_cognito_identity_provider.google]
+}
+
+run "rejects_google_credentials_stored_unencrypted" {
+  command = plan
+
+  override_data {
+    target = data.aws_ssm_parameter.google_oauth
+    values = {
+      type  = "String"
+      value = "{\"client_id\":\"x.apps.googleusercontent.com\",\"client_secret\":\"y\"}"
+    }
+  }
+
+  expect_failures = [aws_cognito_identity_provider.google]
+}
+
+run "rejects_reserved_word_in_domain_prefix" {
   command = plan
 
   variables {
-    cognito_user_pool_id = "ap-south-1_Example"
+    cognito_domain_prefix = "ambrace-cognito"
   }
 
-  expect_failures = [var.cognito_app_client_id]
+  expect_failures = [var.cognito_domain_prefix]
+}
+
+run "rejects_wildcard_callback" {
+  command = plan
+
+  variables {
+    auth_callback_urls = ["https://*.ambrace.in/auth/callback"]
+  }
+
+  expect_failures = [var.auth_callback_urls]
 }
