@@ -104,6 +104,10 @@ data "aws_iam_policy_document" "deploy_app" {
       "apigateway:PUT",
       "apigateway:PATCH",
       "apigateway:DELETE",
+      # Creating a tagged stage is authorized as TagResource on the stage
+      # collection, not through the HTTP-verb actions above.
+      "apigateway:TagResource",
+      "apigateway:UntagResource",
     ]
     resources = [
       "arn:aws:apigateway:${local.aws_region}::/apis",
