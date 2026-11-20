@@ -14,17 +14,6 @@ on:
           - PLAN
           - APPLY
 
-  # ---------------------------------------------------------------------------
-  # TEMPORARY - REMOVE BEFORE MERGING TO MASTER.
-  # A manually triggered workflow cannot be started until its file is on the
-  # default branch, so this push trigger exists only to prove the pipeline (and
-  # the GitHub -> AWS trust) from the feature branch. Every push to this one
-  # branch plans AND applies to the dev account.
-  # ---------------------------------------------------------------------------
-  push:
-    branches:
-      - Ambrace-33-port-backend
-
 permissions:
   contents: read
 
@@ -43,5 +32,4 @@ jobs:
     with:
       github_environment: development
       tf_environment: dev
-      # TEMPORARY: `github.event_name == 'push'` goes away with the push trigger.
-      apply: ${{ github.event_name == 'push' || inputs.operation == 'APPLY' }}
+      apply: ${{ inputs.operation == 'APPLY' }}
