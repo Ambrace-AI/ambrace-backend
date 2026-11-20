@@ -48,11 +48,13 @@ resulting access token to this API.
 - **Cost:** the pool uses the Lite feature plan (free up to 10,000 monthly
   active users, Google sign-ins included), Cognito's built-in email sender
   (50 emails a day per AWS account) and no MFA text messages.
-- **Google credentials:** before the first deployment of an environment, an
-  operator creates one SecureString parameter, `/ambrace/<env>/google_oauth`,
-  with the JSON value `{"client_id":"...","client_secret":"..."}` from the
-  Google OAuth client. The deployment stops with a clear error if it is missing
-  or malformed. To rotate, edit the parameter and run the deployment again.
+- **Google credentials:** the deployment creates one SecureString parameter,
+  `/ambrace/<env>/google_oauth`, with a placeholder. An operator replaces its
+  value with the JSON `{"client_id":"...","client_secret":"..."}` from the
+  Google OAuth client and then **runs the deployment again**, which passes the
+  values to Cognito. Until then Google sign-in does not work and the deployment
+  log shows a warning; email and password sign-in works regardless. A malformed
+  value stops the deployment with a clear error. Rotation is the same two steps.
 - **Not linked:** the same email used once with Google and once with a password
   is two separate accounts for now.
 

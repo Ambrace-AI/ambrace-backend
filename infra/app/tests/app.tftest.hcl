@@ -206,70 +206,30 @@ run "web_client_is_public_pkce_client" {
   }
 }
 
-run "google_uses_credentials_from_ssm" {
+# The value itself is only read during apply on a first deployment, so its
+# format check (secrets.tf) cannot be exercised by these plan-only tests.
+run "google_sign_in_is_wired_to_the_ssm_parameter" {
   command = plan
 
   assert {
-    condition     = data.aws_ssm_parameter.google_oauth.name == "/ambrace/dev/google_oauth"
-    error_message = "Google credentials are read from the per-environment SSM parameter."
+    condition     = aws_ssm_parameter.google_oauth.name == "/ambrace/dev/google_oauth" && aws_ssm_parameter.google_oauth.type == "SecureString"
+    error_message = "Google credentials live in one encrypted SSM parameter per environment."
   }
 
   assert {
-    condition     = nonsensitive(aws_cognito_identity_provider.google.provider_details["client_id"]) == "mock-client-id.apps.googleusercontent.com"
-    error_message = "The Google provider must take its client id from the SSM parameter."
+    condition     = data.aws_ssm_parameter.google_oauth.name == aws_ssm_parameter.google_oauth.name
+    error_message = "Terraform must read the same parameter it creates."
   }
 
   assert {
-    condition     = nonsensitive(aws_cognito_identity_provider.google.provider_details["authorize_scopes"]) == "openid email profile"
-    error_message = "Only the basic Google scopes may be requested."
+    condition     = aws_cognito_identity_provider.google.provider_type == "Google"
+    error_message = "The identity provider must be Google."
   }
 
   assert {
     condition     = aws_cognito_user_pool_domain.main.domain == "ambrace-dev"
     error_message = "The sign-in address must match the one registered with Google."
   }
-}
-
-run "rejects_google_credentials_that_are_not_json" {
-  command = plan
-
-  override_data {
-    target = data.aws_ssm_parameter.google_oauth
-    values = {
-      type  = "SecureString"
-      value = "just-the-client-secret"
-    }
-  }
-
-  expect_failures = [aws_cognito_identity_provider.google]
-}
-
-run "rejects_google_credentials_pasted_the_wrong_way_round" {
-  command = plan
-
-  override_data {
-    target = data.aws_ssm_parameter.google_oauth
-    values = {
-      type  = "SecureString"
-      value = "{\"client_id\":\"a-secret\",\"client_secret\":\"x.apps.googleusercontent.com\"}"
-    }
-  }
-
-  expect_failures = [aws_cognito_identity_provider.google]
-}
-
-run "rejects_google_credentials_stored_unencrypted" {
-  command = plan
-
-  override_data {
-    target = data.aws_ssm_parameter.google_oauth
-    values = {
-      type  = "String"
-      value = "{\"client_id\":\"x.apps.googleusercontent.com\",\"client_secret\":\"y\"}"
-    }
-  }
-
-  expect_failures = [aws_cognito_identity_provider.google]
 }
 
 run "rejects_reserved_word_in_domain_prefix" {

@@ -28,21 +28,64 @@ resource "aws_ssm_parameter" "google_api_key" {
 }
 
 # ------------------------------------------------------------------------------
-# Google sign-in credentials: created by an operator, only READ by Terraform
+# Google sign-in credentials
 # ------------------------------------------------------------------------------
-# One SecureString parameter per environment, holding one JSON value:
-#   name:  /ambrace/<env>/google_oauth
-#   value: {"client_id":"...apps.googleusercontent.com","client_secret":"..."}
+# One SecureString parameter holding one JSON value:
+#   {"client_id":"...apps.googleusercontent.com","client_secret":"..."}
 #
-# It must exist before the first deployment; the plan stops with a clear error
-# if it is missing. Terraform does not create it because Cognito needs the real
-# values at the moment the Google provider is created: a placeholder would
-# create a broken provider and need a second deployment to repair it.
+# Same pattern as the Gemini key: Terraform creates it with a placeholder, an
+# operator pastes the real JSON, and later Terraform runs never overwrite it.
 #
-# Unlike the Gemini key, this value IS copied into the Terraform state file,
-# because Terraform has to hand it to Cognito. The state lives in the private,
-# encrypted state bucket. Cognito offers no way to avoid this.
+# One difference: Terraform reads this value back (the data source below) to
+# configure Google in Cognito. So after changing the value, run the deployment
+# again to pass it on to Cognito. And the value IS copied into the Terraform
+# state file, which lives in the private, encrypted state bucket; Cognito
+# offers no way to avoid this.
+resource "aws_ssm_parameter" "google_oauth" {
+  name        = "${local.ssm_parameter_prefix}/google_oauth"
+  description = "Google OAuth client id and secret (JSON) for Ambrace ${var.environment} sign-in. Placeholder until an operator sets the real value."
+  type        = "SecureString"
+  tier        = "Standard"
+  key_id      = "alias/aws/ssm"
+  value_wo = jsonencode({
+    client_id     = local.google_oauth_placeholder_client_id
+    client_secret = "AMBRACE_REPLACE_ME"
+  })
+  value_wo_version = 1
+
+  lifecycle {
+    prevent_destroy = true
+    ignore_changes = [
+      value_wo,
+      value_wo_version,
+    ]
+  }
+}
+
+# Reads whatever the parameter currently holds: the placeholder at first, the
+# real credentials once an operator has entered them.
 data "aws_ssm_parameter" "google_oauth" {
-  name            = "${local.ssm_parameter_prefix}/google_oauth"
+  name            = aws_ssm_parameter.google_oauth.name
   with_decryption = true
+
+  lifecycle {
+    # Stops the deployment before Cognito is touched if the value was pasted
+    # wrongly: not JSON, a field missing, the two values swapped, or an empty
+    # secret.
+    postcondition {
+      condition = try(
+        endswith(jsondecode(self.value).client_id, ".apps.googleusercontent.com") && length(jsondecode(self.value).client_secret) > 0,
+        false
+      )
+      error_message = "The google_oauth SSM parameter must be JSON of the form {\"client_id\":\"<id>.apps.googleusercontent.com\",\"client_secret\":\"<secret>\"}."
+    }
+  }
+}
+
+locals {
+  # Shaped like a real Google client id so the placeholder passes the check
+  # above and the first deployment can create everything.
+  google_oauth_placeholder_client_id = "replace-me.apps.googleusercontent.com"
+
+  google_oauth = jsondecode(data.aws_ssm_parameter.google_oauth.value)
 }

@@ -10,11 +10,6 @@
 # built-in email sender (no SES).
 
 locals {
-  # Operator-entered JSON (see secrets.tf). try(): a value that is not valid
-  # JSON must reach the precondition on the Google provider and produce a clear
-  # message, not a jsondecode crash.
-  google_oauth = try(jsondecode(data.aws_ssm_parameter.google_oauth.value), {})
-
   cognito_domain_host = "${aws_cognito_user_pool_domain.main.domain}.auth.${local.aws_region}.amazoncognito.com"
 }
 
@@ -86,6 +81,7 @@ resource "aws_cognito_identity_provider" "google" {
   provider_type = "Google"
 
   provider_details = {
+    # Entered by an operator in SSM and checked there (secrets.tf).
     client_id        = local.google_oauth.client_id
     client_secret    = local.google_oauth.client_secret
     authorize_scopes = "openid email profile"
@@ -107,23 +103,6 @@ resource "aws_cognito_identity_provider" "google" {
     email_verified = "email_verified"
     name           = "name"
     picture        = "picture"
-  }
-
-  lifecycle {
-    precondition {
-      # Also catches the two values pasted the wrong way round, and a
-      # client_secret left empty.
-      condition = try(
-        endswith(local.google_oauth.client_id, ".apps.googleusercontent.com") && length(local.google_oauth.client_secret) > 0,
-        false
-      )
-      error_message = "The SSM parameter google_oauth must be JSON of the form {\"client_id\":\"<id>.apps.googleusercontent.com\",\"client_secret\":\"<secret>\"}."
-    }
-
-    precondition {
-      condition     = data.aws_ssm_parameter.google_oauth.type == "SecureString"
-      error_message = "The SSM parameter google_oauth holds a secret and must be of type SecureString."
-    }
   }
 }
 

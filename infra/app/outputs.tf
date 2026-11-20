@@ -69,8 +69,13 @@ output "google_api_key_parameter" {
 }
 
 output "google_oauth_parameter" {
-  description = "SSM parameter an operator creates with the Google client id and secret (JSON)."
-  value       = data.aws_ssm_parameter.google_oauth.name
+  description = "SSM parameter an operator fills with the Google client id and secret (JSON)."
+  value       = aws_ssm_parameter.google_oauth.name
+}
+
+output "google_sign_in_configured" {
+  description = "False while the Google credentials are still the placeholder."
+  value       = nonsensitive(local.google_oauth.client_id != local.google_oauth_placeholder_client_id)
 }
 
 output "cognito_user_pool_id" {
