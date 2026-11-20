@@ -1,0 +1,171 @@
+name: Checks
+
+# Runs on every pull request and on master. Needs no AWS access.
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python - format, lint, types, tests, package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          enable-cache: true
+
+      # --frozen: install exactly what uv.lock records, or fail. Python 3.13 is
+      # selected by requires-python in pyproject.toml. Ruff and mypy are locked
+      # there too, so CI and laptops run identical versions.
+      - name: Install locked dependencies
+        run: uv sync --frozen
+
+      - name: Check formatting (ruff format)
+        run: uv run --frozen ruff format --check .
+
+      - name: Lint (ruff check)
+        run: uv run --frozen ruff check --output-format=github .
+
+      - name: Type check (mypy)
+        run: uv run --frozen mypy
+
+      # Built before the tests: the packaging tests inspect the real artifact.
+      - name: Build Lambda package (Python 3.13, arm64)
+        run: uv run --frozen python scripts/build_lambda.py
+
+      - name: Run test suite
+        run: uv run --frozen pytest -v
+
+      - name: Upload Lambda package for the Terraform job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ambrace-backend-zip-checks
+          path: dist/ambrace-backend.zip
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Verify clean working tree
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Error: the build or checks changed tracked files:" >&2
+            git status --porcelain >&2
+            exit 1
+          fi
+
+  terraform:
+    name: Terraform - format, validate, lint, tests
+    needs: python
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The application stack hashes the artifact, so its plan tests need it.
+      - name: Download Lambda package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ambrace-backend-zip-checks
+          path: dist
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.13.4"
+          terraform_wrapper: false
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive infra
+
+      - name: Validate and test bootstrap stack (mock provider, no AWS)
+        env:
+          AWS_EC2_METADATA_DISABLED: "true"
+          AWS_DEFAULT_REGION: "ap-south-1"
+        run: |
+          terraform -chdir=infra/bootstrap init -backend=false -input=false
+          terraform -chdir=infra/bootstrap validate
+          terraform -chdir=infra/bootstrap test
+
+      - name: Validate and test application stack (mock provider, no AWS)
+        env:
+          AWS_EC2_METADATA_DISABLED: "true"
+          AWS_DEFAULT_REGION: "ap-south-1"
+        run: |
+          terraform -chdir=infra/app init -backend=false -input=false
+          terraform -chdir=infra/app validate
+          terraform -chdir=infra/app test
+
+      - name: Set up TFLint
+        uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
+        with:
+          tflint_version: v0.66.0
+
+      - name: Lint Terraform (TFLint with the AWS ruleset)
+        env:
+          # Only used to download the pinned ruleset plugin without rate limits.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          tflint --init --config "${GITHUB_WORKSPACE}/.tflint.hcl"
+          tflint --recursive --config "${GITHUB_WORKSPACE}/.tflint.hcl"
+
+      # Advisory for now: reported in the run, does not block a merge. Promote
+      # to blocking once the first findings have been triaged.
+      - name: Scan Terraform for misconfigurations (Trivy, advisory)
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: infra
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+  workflows:
+    name: Workflows - lint and security
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Installed outside the workspace from the script at a pinned commit, so
+      # no third-party action is needed and the checkout stays clean.
+      - name: Lint workflow files (actionlint)
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SCRIPT_COMMIT: "914e7df21a07ef503a81201c76d2b11c789d3fca"
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/rhysd/actionlint/${ACTIONLINT_SCRIPT_COMMIT}/scripts/download-actionlint.bash" \
+            -o "${RUNNER_TEMP}/download-actionlint.bash"
+          bash "${RUNNER_TEMP}/download-actionlint.bash" "${ACTIONLINT_VERSION}" "${RUNNER_TEMP}"
+          "${RUNNER_TEMP}/actionlint" -color
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+
+      # Advisory for now: flags unpinned actions, excessive permissions and
+      # injection-prone expressions.
+      - name: Audit workflow security (zizmor, advisory)
+        continue-on-error: true
+        run: uvx zizmor@1.32.0 .github/workflows

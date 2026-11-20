@@ -1,0 +1,35 @@
+name: Deploy Development
+
+# Manual: run from master or an Ambrace-* branch with PLAN or APPLY. The
+# `development` GitHub Environment refuses any other branch.
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "PLAN shows what would change. APPLY deploys."
+        required: true
+        type: choice
+        default: "PLAN"
+        options:
+          - PLAN
+          - APPLY
+
+permissions:
+  contents: read
+
+# One dev deployment at a time; a newer run waits rather than cancelling one
+# that is mid-apply.
+concurrency:
+  group: ambrace-dev-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_deploy.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      github_environment: development
+      tf_environment: dev
+      apply: ${{ inputs.operation == 'APPLY' }}

@@ -1,0 +1,22 @@
+"""
+Pytest configuration and fixtures for ambrace-backend.
+Sets dummy environment variables for required settings so application
+can be imported and initialized cleanly in test environments.
+Ensures repository root is in sys.path.
+"""
+
+import os
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+# Set test environment variables immediately so module-level Settings() initialization succeeds
+os.environ.setdefault("DYNAMODB_TABLE_NAME", "ambrace-test-sessions")
+os.environ.setdefault("GOOGLE_API_KEY", "test_google_api_key")
+# Tests never inherit a developer's real pool; auth is exercised explicitly.
+os.environ["COGNITO_USER_POOL_ID"] = ""
+os.environ["COGNITO_APP_CLIENT_ID"] = ""
+os.environ.setdefault("CORS_ORIGINS", "https://app.ambrace.in")
