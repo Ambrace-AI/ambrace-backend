@@ -1,0 +1,6 @@
+# First-apply only. Copy to backend_override.tf (git-ignored) to run the bootstrap
+# on local state while the S3 state bucket does not exist yet. Delete the copy and
+# run `terraform init -migrate-state -backend-config=<env>.backend.hcl` right after.
+terraform {
+  backend "local" {}
+}
