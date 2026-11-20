@@ -31,7 +31,7 @@ GitHub signs a short-lived token for every workflow job. The deploy role trusts
 exactly one token subject:
 
 ```
-repo:Ambrace-AI@357749772/ambrace-backend@1462386177:environment:<development|production>
+repo:Ambrace-SI@357749772/ambrace-backend@1462386177:environment:<development|production>
 ```
 
 - The numbers are GitHub's permanent organisation and repository IDs (the
@@ -46,7 +46,7 @@ If the repository is ever transferred or its subject format changes, read the
 live prefix and update `github_subject_prefix`:
 
 ```powershell
-gh api repos/Ambrace-AI/ambrace-backend/actions/oidc/customization/sub --jq .sub_claim_prefix
+gh api repos/Ambrace-SI/ambrace-backend/actions/oidc/customization/sub --jq .sub_claim_prefix
 ```
 
 ### What the deploy role can and cannot do
@@ -66,7 +66,7 @@ account. Granting application code a new AWS capability means editing
 
 - Terraform `>= 1.11.4`
 - AWS CLI v2
-- GitHub CLI (`gh`), signed in with admin rights on `Ambrace-AI/ambrace-backend`
+- GitHub CLI (`gh`), signed in with admin rights on `Ambrace-SI/ambrace-backend`
 - `AdministratorAccess` on the target account through IAM Identity Center
 
 Create the two CLI profiles. Run this once per profile and answer the prompts:
@@ -188,15 +188,15 @@ These are plain variables, not secrets: a role ARN is not sensitive, and the rol
 can only be assumed by this repository's environment.
 
 ```powershell
-gh api --method PUT repos/Ambrace-AI/ambrace-backend/environments/development
+gh api --method PUT repos/Ambrace-SI/ambrace-backend/environments/development
 ```
 
 ```powershell
-gh variable set AWS_DEPLOY_ROLE_ARN --repo Ambrace-AI/ambrace-backend --env development --body "arn:aws:iam::798299234172:role/ambrace-github-deploy-dev"
+gh variable set AWS_DEPLOY_ROLE_ARN --repo Ambrace-SI/ambrace-backend --env development --body "arn:aws:iam::798299234172:role/ambrace-github-deploy-dev"
 ```
 
 ```powershell
-gh variable set AWS_REGION --repo Ambrace-AI/ambrace-backend --env development --body "ap-south-1"
+gh variable set AWS_REGION --repo Ambrace-SI/ambrace-backend --env development --body "ap-south-1"
 ```
 
 For prod use environment `production` and
