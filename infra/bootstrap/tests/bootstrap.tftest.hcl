@@ -65,7 +65,7 @@ run "only_the_github_environment_can_assume_the_role" {
   command = plan
 
   assert {
-    condition     = output.github_deploy_subject == "repo:Ambrace-AI@357749772/ambrace-backend@1462386177:environment:development"
+    condition     = output.github_deploy_subject == "repo:Ambrace-SI@357749772/ambrace-backend@1462386177:environment:development"
     error_message = "Deploy subject must be the immutable repo prefix plus the GitHub Environment."
   }
 
@@ -102,7 +102,7 @@ run "rejects_wildcard_subject_prefix" {
   command = plan
 
   variables {
-    github_subject_prefix = "repo:Ambrace-AI/*"
+    github_subject_prefix = "repo:Ambrace-SI/*"
   }
 
   expect_failures = [var.github_subject_prefix]

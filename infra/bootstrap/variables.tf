@@ -40,9 +40,9 @@ variable "github_subject_prefix" {
     Prefix of the OIDC `sub` claim GitHub issues for this repository. Repositories
     created after 15 Jul 2026 use the immutable form that embeds the numeric owner
     and repository IDs: `repo:OWNER@OWNER_ID/REPO@REPO_ID`. Read the live value with:
-      gh api repos/Ambrace-AI/ambrace-backend/actions/oidc/customization/sub --jq .sub_claim_prefix
+      gh api repos/Ambrace-SI/ambrace-backend/actions/oidc/customization/sub --jq .sub_claim_prefix
   EOT
-  default     = "repo:Ambrace-AI@357749772/ambrace-backend@1462386177"
+  default     = "repo:Ambrace-SI@357749772/ambrace-backend@1462386177"
 
   validation {
     condition     = can(regex("^repo:[^:*?]+/[^:*?]+$", var.github_subject_prefix))
