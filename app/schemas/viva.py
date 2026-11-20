@@ -1,0 +1,268 @@
+"""
+This module defines the Pydantic schemas for the API.
+These schemas act as the data contracts for API requests and responses.
+"""
+
+import datetime
+from typing import Annotated
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
+
+from app.db.models import SESSION_ID_PATTERN
+from app.domain import curriculum as curriculum_domain
+
+SessionId = Annotated[str, StringConstraints(pattern=SESSION_ID_PATTERN, max_length=53)]
+
+ReportPoint = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=600)
+]
+
+
+# --- Shared Models ---
+class VivaFeedback(BaseModel):
+    """Written assessment returned with a completed viva, separate from spoken closing audio."""
+
+    score: int
+    summary: str
+    strong_points: list[str]
+    areas_of_improvement: list[str]
+    next_steps: list[str] = Field(default_factory=list)
+    coverage_note: str | None = None
+
+
+# == Viva Start Schemas ==
+
+
+CurriculumId = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=160,
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    ),
+]
+CurriculumLabel = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)
+]
+
+
+class SelectedTopic(curriculum_domain.SelectedTopic):
+    """One chosen catalog or custom topic; IDs identify choices, names guide questions."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: CurriculumId
+    name: CurriculumLabel
+
+    @model_validator(mode="after")
+    def valid_custom_topic(self):
+        """Enforce the UI text limit for custom topics, identified by their reserved ID prefix."""
+        if self.id.startswith("custom-topic-") and (
+            len(self.name) > 100 or any(ord(c) < 32 or ord(c) == 127 for c in self.name)
+        ):
+            raise ValueError(
+                "Custom topics must be a single line of at most 100 characters"
+            )
+        return self
+
+
+class SelectedChapter(curriculum_domain.SelectedChapter):
+    """A chapter and its focus topics; an empty list selects the whole chapter."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: CurriculumId
+    name: CurriculumLabel
+    # No chosen topics means the entire chapter, rather than an empty assessment.
+    # The API model narrows the domain element type; list invariance is a
+    # typing-only concern here, pydantic validates the narrowed type.
+    topics: list[SelectedTopic] = Field(  # type: ignore[assignment]
+        default_factory=list, max_length=100
+    )
+
+    @model_validator(mode="after")
+    def unique_topics(self):
+        """Reject repeated IDs and case-insensitive custom duplicates; cap custom topics at 20."""
+        if len({topic.id for topic in self.topics}) != len(self.topics):
+            raise ValueError("Topic IDs must be unique within a chapter")
+        custom = [
+            topic.name.casefold()
+            for topic in self.topics
+            if topic.id.startswith("custom-topic-")
+        ]
+        if len(custom) > 20 or len(set(custom)) != len(custom):
+            raise ValueError(
+                "Custom topics must be unique, with at most 20 per chapter"
+            )
+        return self
+
+
+class CurriculumSelectionRequest(curriculum_domain.CurriculumSelection):
+    """Validate request shape without coupling the API to the webapp's catalog.
+
+    Names and optional revision metadata are supplied by the client. They record
+    the requested scope, not a server-verified syllabus or textbook edition.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    catalog_id: CurriculumId | None = None
+    catalog_version: CurriculumId | None = None
+    class_level: int = Field(ge=5, le=12, strict=True)
+    subject_id: CurriculumId
+    subject_name: CurriculumLabel
+    chapters: list[SelectedChapter] = Field(  # type: ignore[assignment]
+        min_length=1, max_length=100
+    )
+
+    @model_validator(mode="after")
+    def unique_chapters(self):
+        """Keep chapter identities unambiguous when reading or validating a selection."""
+        if len({chapter.id for chapter in self.chapters}) != len(self.chapters):
+            raise ValueError("Chapter IDs must be unique")
+        return self
+
+
+class VivaStartRequest(BaseModel):
+    """
+    Request to start a new viva session.
+
+    Note: user_id is NOT included here - it comes from the authenticated
+    JWT token to prevent client-side spoofing.
+    """
+
+    student_name: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)
+    ] = Field(..., json_schema_extra={"example": "John Doe"})
+    topic: str = Field(..., json_schema_extra={"example": "Python Programming"})
+    class_level: str = Field(..., json_schema_extra={"example": "12"})
+    session_type: str | None = Field(default="viva")
+    voice_name: str | None = Field(default="Kore")
+    enable_thinking: bool | None = Field(default=True)
+    thinking_budget: int | None = Field(default=1024)
+    curriculum_selection: CurriculumSelectionRequest | None = None
+
+    @model_validator(mode="after")
+    def validate_selection_class(self):
+        """Require one chapter and one consistent class so the examiner gets a single scope."""
+        # Stored selections can contain more chapters; each new viva accepts one.
+        if (
+            isinstance(self.curriculum_selection, CurriculumSelectionRequest)
+            and len(self.curriculum_selection.chapters) != 1
+        ):
+            raise ValueError("Select exactly one chapter for a viva")
+        if self.curriculum_selection and self.class_level != str(
+            self.curriculum_selection.class_level
+        ):
+            raise ValueError("Class level must match the curriculum selection")
+        if self.curriculum_selection:
+            # Keep history titles aligned with the same client-supplied scope
+            # used by the prompt, instead of a competing free-text topic.
+            chapter = self.curriculum_selection.chapters[0]
+            self.topic = chapter.name + (
+                ": " + ", ".join(t.name for t in chapter.topics)
+                if chapter.topics
+                else ""
+            )
+        return self
+
+
+class VivaStartResponse(BaseModel):
+    """Connection metadata for the browser; ephemeral credentials must not be persisted."""
+
+    viva_session_id: str
+    ephemeral_token: str
+    google_model: str
+    session_duration_minutes: int
+    voice_name: str
+    google_api_version: str = "v1beta"
+    token_expires_at: datetime.datetime | None = None
+    new_session_expires_at: datetime.datetime | None = None
+    session_deadline_at: datetime.datetime | None = None
+    session_resumption_enabled: bool = False
+    vad_profile: str | None = None
+
+
+# == Conclude Viva Schemas ==
+
+
+class ConcludeVivaRequest(BaseModel):
+    """Bounded assessment payload accepted by the terminal session write."""
+
+    viva_session_id: SessionId
+    score: int = Field(..., ge=0, le=10)
+    summary: str = Field(..., min_length=1, max_length=2000)
+    strong_points: list[ReportPoint] = Field(..., max_length=5)
+    areas_of_improvement: list[ReportPoint] = Field(..., max_length=5)
+    next_steps: list[ReportPoint] = Field(default_factory=list, max_length=3)
+    coverage_note: ReportPoint | None = None
+    transcript: str | None = Field(default=None, max_length=65536)
+
+    @field_validator("transcript")
+    @classmethod
+    def bounded_transcript(cls, value: str | None) -> str | None:
+        """Limit UTF-8 bytes as well as characters so multibyte text fits the storage budget."""
+        if value is not None and len(value.encode("utf-8")) > 65536:
+            raise ValueError("Transcript exceeds 64 KiB")
+        return value
+
+
+class ConcludeVivaResponse(BaseModel):
+    """Authoritative completion result, including the report that won any write race."""
+
+    status: str = "completed"
+    score: int
+    final_feedback: str
+
+
+# == History & Retrieval Schemas ==
+
+
+class VivaSessionSummary(BaseModel):
+    """Compact history entry that omits report contents and connection credentials."""
+
+    viva_session_id: str
+    title: str
+    topic: str
+    class_level: str
+    started_at: datetime.datetime
+    session_type: str
+    status: str
+
+
+class VivaSessionDetailResponse(BaseModel):
+    """Owned session details for the saved report and optional transcript view."""
+
+    viva_session_id: str
+    student_name: str
+    title: str
+    topic: str
+    class_level: str
+    started_at: datetime.datetime
+    ended_at: datetime.datetime | None = None
+    status: str
+    feedback: VivaFeedback | None = None
+    transcript: str | None = None
+
+
+class HistoryResponse(BaseModel):
+    """One page of history with an opaque cursor for the next page."""
+
+    sessions: list[VivaSessionSummary]
+    next_cursor: str | None = None
+
+
+class RenameSessionRequest(BaseModel):
+    """Request to rename a viva session."""
+
+    new_title: str = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="New title for the session (1-200 characters)",
+    )

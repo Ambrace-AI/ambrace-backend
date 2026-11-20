@@ -11,10 +11,10 @@ locals {
 
   state_bucket_name = "ambrace-terraform-state-${local.account_id}"
 
-  # State layout inside the bucket.
-  bootstrap_state_key = "bootstrap/terraform.tfstate"
-  app_state_prefix    = "backend"
-  app_state_key       = "${local.app_state_prefix}/terraform.tfstate"
+  # State layout inside the bucket. This stack keeps its own state under
+  # bootstrap/ (see <env>.backend.hcl), which the deploy role cannot reach.
+  app_state_prefix = "backend"
+  app_state_key    = "${local.app_state_prefix}/terraform.tfstate"
 }
 
 # ==============================================================================

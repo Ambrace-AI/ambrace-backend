@@ -1,0 +1,65 @@
+[project]
+name = "ambrace-backend"
+version = "1.0.0"
+description = "FastAPI backend for the Ambrace AI viva platform"
+readme = "README.md"
+# Pinned to the AWS Lambda runtime (python3.13) so local, CI and production agree.
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    # Core framework
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "pydantic-settings>=2.6.0",
+    "python-dotenv>=1.0.0",
+    # Gemini Live (pinned: the token-constraint contract in docs/gemini-live-contract.md is version-specific)
+    "google-genai==2.25.0",
+    # Amazon Cognito access-token verification
+    "PyJWT[crypto]>=2.10.0",
+    # Rate limiting
+    "slowapi>=0.1.9",
+    # AWS SDK (SSM runtime configuration, DynamoDB)
+    "boto3==1.43.93",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "httpx>=0.27.0",
+    "moto[dynamodb]>=5.1.0,<6",
+    # Code quality. Exact pins: a new release must never change what CI enforces
+    # without a reviewed commit.
+    "ruff==0.17.6",
+    "mypy==2.4.1",
+]
+
+[tool.uv]
+# An application, not a library: nothing to build or install as a package.
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py313"
+extend-exclude = ["build", "dist"]
+
+[tool.ruff.lint]
+# E/F: pycodestyle and pyflakes errors. I: import order. B: likely bugs.
+# UP: syntax the target Python version has superseded.
+select = ["E", "F", "I", "B", "UP"]
+# Line length is owned by the formatter.
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI declares dependencies as call expressions in argument defaults.
+"app/api/**" = ["B008"]
+
+[tool.mypy]
+# Non-strict to start: the code base predates type checking. Reported in CI
+# without failing the run until the existing findings are cleared.
+files = ["app"]
+python_version = "3.13"
+plugins = ["pydantic.mypy"]
+explicit_package_bases = true
+ignore_missing_imports = true
+warn_unused_ignores = true

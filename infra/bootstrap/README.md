@@ -205,7 +205,8 @@ For prod use environment `production` and
 Then, in GitHub → Settings → Environments:
 
 - `production`: add **Required reviewers** (at least one person) and restrict
-  **Deployment branches** to `master`.
+  **Deployment branches** to `release`. Production is only ever deployed from
+  the `release` branch.
 - `development`: restrict **Deployment branches** to `master` and `Ambrace-*`.
   Without this, a workflow on any branch that declares
   `environment: development` receives the dev deploy role.

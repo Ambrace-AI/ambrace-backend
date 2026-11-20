@@ -1,0 +1,266 @@
+name: Deploy (reusable)
+
+# Shared by deploy-dev.yml and deploy-prod.yml so both environments are deployed
+# by exactly the same steps. Not triggered directly.
+#
+# AWS access: no stored keys. The `deploy` job declares a GitHub Environment;
+# GitHub issues it an OIDC token whose subject names that environment, and AWS
+# exchanges it for one-hour credentials on the role in vars.AWS_DEPLOY_ROLE_ARN.
+# See infra/bootstrap/README.md.
+
+on:
+  workflow_call:
+    inputs:
+      github_environment:
+        description: "GitHub Environment to deploy through (development or production)"
+        required: true
+        type: string
+      tf_environment:
+        description: "Terraform environment name (dev or prod); selects <env>.tfvars and <env>.backend.hcl"
+        required: true
+        type: string
+      apply:
+        description: "false = plan and inspect only; true = also apply and smoke test"
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Test and build artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          enable-cache: true
+
+      # --frozen: install exactly what uv.lock records, or fail. Python 3.13 is
+      # selected by requires-python in pyproject.toml.
+      - name: Install locked dependencies
+        run: uv sync --frozen
+
+      - name: Build Lambda package (Python 3.13, arm64)
+        run: uv run --frozen python scripts/build_lambda.py
+
+      # Nothing is deployed unless the exact artifact being shipped passes.
+      - name: Run test suite against the built artifact
+        run: uv run --frozen pytest -v
+
+      - name: Upload verified Lambda package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ambrace-backend-zip
+          path: dist/ambrace-backend.zip
+          retention-days: 1
+          if-no-files-found: error
+
+  deploy:
+    name: ${{ inputs.apply && 'Deploy' || 'Plan' }} ${{ inputs.tf_environment }}
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ inputs.github_environment }}
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      TF_IN_AUTOMATION: "1"
+      TF_INPUT: "0"
+      TF_ENVIRONMENT: ${{ inputs.tf_environment }}
+      APPLY: ${{ inputs.apply }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download verified Lambda package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ambrace-backend-zip
+          path: dist
+
+      - name: Check environment configuration
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          AWS_REGION_VAR: ${{ vars.AWS_REGION }}
+        run: |
+          if [ -z "${AWS_DEPLOY_ROLE_ARN}" ] || [ -z "${AWS_REGION_VAR}" ]; then
+            echo "Error: the GitHub Environment must define AWS_DEPLOY_ROLE_ARN and AWS_REGION." >&2
+            echo "See infra/bootstrap/README.md, 'Connect GitHub'." >&2
+            exit 1
+          fi
+          case "${TF_ENVIRONMENT}" in
+            dev|prod) ;;
+            *) echo "Error: tf_environment must be dev or prod." >&2; exit 1 ;;
+          esac
+          test -f "infra/app/${TF_ENVIRONMENT}.tfvars"
+          test -f "infra/app/${TF_ENVIRONMENT}.backend.hcl"
+          ls -lh dist/ambrace-backend.zip
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.13.4"
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials via GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: github-${{ inputs.tf_environment }}-${{ github.run_id }}
+
+      # Terraform also refuses a wrong account (allowed_account_ids in the
+      # var-file); this prints who we are so the log shows it.
+      - name: Show assumed AWS identity
+        run: aws sts get-caller-identity --query '{Account:Account,Arn:Arn}' --output table
+
+      - name: Terraform init
+        run: terraform -chdir=infra/app init -backend-config="${TF_ENVIRONMENT}.backend.hcl"
+
+      - name: Terraform validate
+        run: terraform -chdir=infra/app validate
+
+      - name: Terraform plan
+        run: terraform -chdir=infra/app plan -var-file="${TF_ENVIRONMENT}.tfvars" -out=deploy.tfplan
+
+      - name: Inspect plan and block destructive changes
+        run: |
+          PLAN_JSON=$(terraform -chdir=infra/app show -json deploy.tfplan)
+
+          ACTIVE_CHANGES=$(echo "${PLAN_JSON}" | jq -c '
+            [.resource_changes[]? | select(.change.actions != ["no-op"] and .change.actions != ["read"])]
+          ')
+
+          echo "Resource changes in the saved plan:"
+          echo "${ACTIVE_CHANGES}" | jq -r '.[] | "  - \(.address): \(.change.actions | join(","))"'
+          echo "Total: $(echo "${ACTIVE_CHANGES}" | jq 'length')"
+
+          # A pipeline never deletes or replaces infrastructure on its own. A
+          # table, parameter or API being destroyed must be a deliberate, manual act.
+          BLOCKED_DELETIONS=$(echo "${ACTIVE_CHANGES}" | jq -c '[.[] | select(.change.actions | index("delete"))]')
+          if [ "$(echo "${BLOCKED_DELETIONS}" | jq 'length')" -gt 0 ]; then
+            echo "ERROR: the plan deletes or replaces resources. Automatic apply is blocked:" >&2
+            echo "${BLOCKED_DELETIONS}" | jq -r '.[] | "  - \(.address): \(.change.actions | join(","))"' >&2
+            exit 1
+          fi
+          echo "Plan safety check passed: no deletions or replacements."
+
+          if [ "${APPLY}" != "true" ]; then
+            echo "PLAN ONLY: nothing in AWS will be changed by this run."
+          fi
+
+      - name: Terraform apply (saved plan)
+        if: ${{ inputs.apply }}
+        run: terraform -chdir=infra/app apply deploy.tfplan
+
+      - name: Smoke test - service is up (GET /)
+        if: ${{ inputs.apply }}
+        run: |
+          HEALTH_URL=$(terraform -chdir=infra/app output -raw health_url)
+          echo "Checking ${HEALTH_URL}"
+          for i in $(seq 1 12); do
+            RESPONSE=$(curl -s -w "\n%{http_code}" "${HEALTH_URL}" || true)
+            HTTP_STATUS=$(echo "${RESPONSE}" | tail -n1)
+            BODY=$(echo "${RESPONSE}" | sed '$d')
+            if [ "${HTTP_STATUS}" = "200" ] && echo "${BODY}" | grep -q '"status":[[:space:]]*"healthy"'; then
+              echo "Healthy: ${BODY}"
+              exit 0
+            fi
+            echo "Attempt ${i}/12 returned HTTP ${HTTP_STATUS}; retrying in 5s..."
+            sleep 5
+          done
+          echo "ERROR: service did not become healthy." >&2
+          exit 1
+
+      - name: Smoke test - database reachable (GET /health)
+        if: ${{ inputs.apply }}
+        run: |
+          API_ENDPOINT=$(terraform -chdir=infra/app output -raw api_endpoint)
+          RESPONSE=$(curl -s -w "\n%{http_code}" "${API_ENDPOINT}/health" || true)
+          HTTP_STATUS=$(echo "${RESPONSE}" | tail -n1)
+          BODY=$(echo "${RESPONSE}" | sed '$d')
+          echo "GET /health -> HTTP ${HTTP_STATUS}: ${BODY}"
+          if [ "${HTTP_STATUS}" != "200" ] || ! echo "${BODY}" | grep -q '"database":[[:space:]]*"connected"'; then
+            echo "ERROR: expected HTTP 200 with database: connected." >&2
+            exit 1
+          fi
+
+      - name: Smoke test - protected routes reject anonymous and forged callers
+        if: ${{ inputs.apply }}
+        run: |
+          API_ENDPOINT=$(terraform -chdir=infra/app output -raw api_endpoint)
+          START_URL="${API_ENDPOINT}/api/v1/viva/start"
+
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${START_URL}" \
+            -H "Content-Type: application/json" -d '{}')
+          echo "No Authorization header -> HTTP ${STATUS}"
+          [ "${STATUS}" = "401" ] || { echo "ERROR: expected 401." >&2; exit 1; }
+
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${START_URL}" \
+            -H "Content-Type: application/json" -H "Authorization: Bearer not-a-real-token" -d '{}')
+          echo "Forged bearer token -> HTTP ${STATUS}"
+          [ "${STATUS}" = "401" ] || { echo "ERROR: expected 401." >&2; exit 1; }
+
+      - name: Smoke test - CORS allows the configured origin only
+        if: ${{ inputs.apply }}
+        run: |
+          API_ENDPOINT=$(terraform -chdir=infra/app output -raw api_endpoint)
+          START_URL="${API_ENDPOINT}/api/v1/viva/start"
+          ALLOWED_ORIGIN=$(terraform -chdir=infra/app output -json cors_allowed_origins | jq -r '.[0]')
+
+          HEADERS=$(curl -s -i -X OPTIONS "${START_URL}" \
+            -H "Origin: ${ALLOWED_ORIGIN}" \
+            -H "Access-Control-Request-Method: POST" \
+            -H "Access-Control-Request-Headers: authorization,content-type")
+          if ! echo "${HEADERS}" | grep -qi "^access-control-allow-origin: ${ALLOWED_ORIGIN}"; then
+            echo "ERROR: ${ALLOWED_ORIGIN} was not allowed." >&2
+            echo "${HEADERS}" >&2
+            exit 1
+          fi
+          echo "Allowed origin accepted: ${ALLOWED_ORIGIN}"
+
+          HEADERS=$(curl -s -i -X OPTIONS "${START_URL}" \
+            -H "Origin: https://not-allowed.example" \
+            -H "Access-Control-Request-Method: POST")
+          if echo "${HEADERS}" | grep -qi "^access-control-allow-origin:"; then
+            echo "ERROR: an unlisted origin was granted CORS access." >&2
+            exit 1
+          fi
+          echo "Unlisted origin refused."
+
+      # Informational: this only passes once the api CNAME exists at the DNS
+      # provider (docs/domains-and-dns.md), so it warns instead of failing.
+      - name: Smoke test - custom domain (warning only)
+        if: ${{ inputs.apply }}
+        run: |
+          CUSTOM_URL=$(terraform -chdir=infra/app output -raw custom_domain_url 2>/dev/null || echo "")
+          if [ -z "${CUSTOM_URL}" ] || [ "${CUSTOM_URL}" = "null" ]; then
+            echo "No custom domain configured."
+            exit 0
+          fi
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "${CUSTOM_URL}/health" || true)
+          if [ "${STATUS}" = "200" ]; then
+            echo "Custom domain healthy: ${CUSTOM_URL}"
+          else
+            echo "::warning::${CUSTOM_URL}/health returned HTTP ${STATUS}. Add the DNS record: CNAME -> $(terraform -chdir=infra/app output -raw custom_domain_target)"
+          fi
+
+      - name: Verify nothing is left to apply
+        if: ${{ inputs.apply }}
+        run: terraform -chdir=infra/app plan -var-file="${TF_ENVIRONMENT}.tfvars" -detailed-exitcode -no-color
