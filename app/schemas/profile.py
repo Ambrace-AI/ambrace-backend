@@ -31,6 +31,9 @@ def _reject_control_characters(value: str, *, allow_newline: bool = False) -> st
 class ProfileUpdateRequest(BaseModel):
     """Everything onboarding collects. Sending it again replaces the profile.
 
+    Only the name and the class are required: they are what a viva needs. The
+    board and the school can be added later, so a student is never blocked.
+
     The user id is NOT part of this request: it comes from the verified token.
     Unknown fields are rejected so a client cannot set server-owned values.
     """
@@ -41,7 +44,7 @@ class ProfileUpdateRequest(BaseModel):
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)
     ]
     class_level: int = Field(ge=MIN_CLASS_LEVEL, le=MAX_CLASS_LEVEL, strict=True)
-    board: Board
+    board: Board | None = None
     school_name: Annotated[str, StringConstraints(max_length=150)] | None = None
     school_address: Annotated[str, StringConstraints(max_length=300)] | None = None
 
@@ -77,7 +80,7 @@ class ProfileResponse(BaseModel):
 
     name: str
     class_level: int
-    board: Board
+    board: Board | None
     school_name: str | None
     school_address: str | None
     created_at: datetime.datetime

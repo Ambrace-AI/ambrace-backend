@@ -25,7 +25,8 @@ class UserProfile(BaseModel):
 
     name: str
     class_level: int
-    board: Board
+    # Optional: onboarding only insists on a name and a class.
+    board: Board | None = None
     school_name: str | None = None
     school_address: str | None = None
     # Set by the repository. Values supplied by a caller are ignored on save.

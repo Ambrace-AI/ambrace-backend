@@ -79,6 +79,12 @@ def test_optional_school_details_can_be_absent(repository):
     assert loaded.school_address is None
 
 
+def test_board_can_be_left_for_later(repository):
+    asyncio.run(repository.save("owner", profile(board=None)))
+
+    assert asyncio.run(repository.get("owner")).board is None
+
+
 def test_saving_again_replaces_details_but_keeps_the_creation_time(repository):
     first = asyncio.run(repository.save("owner", profile()))
     second = asyncio.run(
