@@ -32,8 +32,10 @@ from app.core.auth import (
     CurrentUser,
 )
 from app.db.database import get_repository, init_db
+from app.db.profile_repository import ProfileRepository
 from app.interfaces.llm_client import LLMClient
 from app.services.gemini_service import GeminiService
+from app.services.profile_service import ProfileService
 from app.services.viva_service import VivaService
 
 
@@ -73,3 +75,19 @@ async def get_viva_service(
     """
     await init_db()
     return VivaService(llm_client=llm_service, repository=get_repository())
+
+
+# ----------------------------------------------------------------------
+# Profile Service Provider
+# ----------------------------------------------------------------------
+async def get_profile_service(current_user: CurrentUser) -> ProfileService:
+    """
+    Wire the profile service after authentication has succeeded.
+
+    As with the viva service, CurrentUser is a dependency so that an
+    unauthenticated request returns 401 before any database work. Profiles live
+    in the sessions table, so the same cached DynamoDB client is reused.
+    """
+    await init_db()
+    sessions = get_repository()
+    return ProfileService(ProfileRepository(sessions.client, sessions.table_name))

@@ -15,7 +15,7 @@ By structuring routers this way, the application:
 
 from fastapi import APIRouter
 
-from app.api.v1 import viva  # Import router for v1 viva endpoints
+from app.api.v1 import me, viva
 
 # ----------------------------------------------------------------------
 # Main API Router
@@ -38,4 +38,13 @@ api_router.include_router(
     viva.router,
     prefix="/v1/viva",
     tags=["viva"],
+)
+
+# The signed-in user's own profile:
+#   GET /v1/me
+#   PUT /v1/me
+api_router.include_router(
+    me.router,
+    prefix="/v1/me",
+    tags=["me"],
 )
