@@ -73,8 +73,9 @@ a profile cannot be read or written for anyone else.
 | `PUT /api/v1/me` | Creates or replaces the profile and returns the same shape. |
 
 Profile fields: `name` (required, up to 100 characters), `class_level`
-(required, whole number 5 to 12), `board` (required: `CBSE`, `ICSE`,
+(required, whole number 5 to 12), `board` (optional: `CBSE`, `ICSE`,
 `STATE_BOARD` or `OTHER`), `school_name` and `school_address` (optional).
+Only the name and the class are needed to complete onboarding.
 Unknown fields and control characters are rejected (an address may contain
 line breaks). Responses carry `Cache-Control: no-store`.
 

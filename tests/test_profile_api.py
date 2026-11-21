@@ -102,6 +102,30 @@ def test_school_details_are_optional_and_blank_text_means_absent(repository):
         assert saved.school_address is None
 
 
+def test_only_name_and_class_are_needed_to_complete_onboarding(repository):
+    repository.save.return_value = stored(
+        board=None, school_name=None, school_address=None
+    )
+
+    response = TestClient(app).put(
+        "/api/v1/me", json={"name": "Asha Rao", "class_level": 9}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["onboarding_complete"] is True
+    assert response.json()["profile"]["board"] is None
+    assert repository.save.await_args.args[1].board is None
+
+
+def test_an_explicit_null_board_means_not_chosen(repository):
+    repository.save.return_value = stored(board=None)
+
+    response = TestClient(app).put("/api/v1/me", json={**VALID, "board": None})
+
+    assert response.status_code == 200
+    assert repository.save.await_args.args[1].board is None
+
+
 def test_name_is_trimmed(repository):
     repository.save.return_value = stored()
 
@@ -137,7 +161,7 @@ def test_invalid_or_unexpected_fields_are_rejected(repository, change):
     repository.save.assert_not_awaited()
 
 
-@pytest.mark.parametrize("missing", ["name", "class_level", "board"])
+@pytest.mark.parametrize("missing", ["name", "class_level"])
 def test_required_fields_cannot_be_omitted(repository, missing):
     body = {key: value for key, value in VALID.items() if key != missing}
 
