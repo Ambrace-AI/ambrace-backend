@@ -26,8 +26,8 @@ app/
   api/            HTTP routes
   core/auth/      Cognito token verification and FastAPI auth dependencies
   core/           settings and SSM runtime configuration
-  services/       viva lifecycle, Gemini Live token and prompt construction
-  db/             DynamoDB repository
+  services/       viva lifecycle, Gemini Live token and prompt construction, user profile
+  db/             DynamoDB repositories (sessions, user profile)
 infra/
   bootstrap/      applied once per account by an admin (state, GitHub OIDC, deploy role)
   app/            everything else, applied only by GitHub Actions
@@ -60,6 +60,28 @@ resulting access token to this API.
 
 When run locally without `COGNITO_USER_POOL_ID` and `COGNITO_APP_CLIENT_ID`, the
 API fails closed: `/` and `/health` work, every protected route returns `401`.
+
+## User profile and onboarding
+
+After signing in, the web app asks the student for a few details once and
+stores them through this API. The user is always the one in the access token;
+a profile cannot be read or written for anyone else.
+
+| Route | Purpose |
+|---|---|
+| `GET /api/v1/me` | Always `200`. Returns `user_id`, `onboarding_complete` and `profile` (`null` until onboarding is done). |
+| `PUT /api/v1/me` | Creates or replaces the profile and returns the same shape. |
+
+Profile fields: `name` (required, up to 100 characters), `class_level`
+(required, whole number 5 to 12), `board` (required: `CBSE`, `ICSE`,
+`STATE_BOARD` or `OTHER`), `school_name` and `school_address` (optional).
+Unknown fields and control characters are rejected (an address may contain
+line breaks). Responses carry `Cache-Control: no-store`.
+
+The profile is one item in the sessions table (`pk = USER#<id>`,
+`sk = PROFILE`), so it needs no extra table, index or permission. The
+`/api/v1/viva/start` request is unchanged: the web app passes the name and
+class from the profile.
 
 ## Local development
 
@@ -178,5 +200,6 @@ The one-time account setup is in [infra/bootstrap/README.md](infra/bootstrap/REA
 
 ## Privacy
 
-Candidate audio never reaches this service. Transcripts and prompts are never
-logged; logs carry event names and safe metadata only.
+Candidate audio never reaches this service. Transcripts, prompts and profile
+details (name, school, address) are never logged; logs carry event names and
+safe metadata only.
